@@ -1,0 +1,16 @@
+[package]
+name = "eqar"
+description = "Equirectangular (360 degree) ArUco marker detector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Disable the aarch64 NEON paths and use the scalar code everywhere
+# (the scalar path is bit-identical to NEON for the integer kernels).
+no-neon = []
+
+[dev-dependencies]
+eqar-testkit = { path = "../eqar-testkit" }

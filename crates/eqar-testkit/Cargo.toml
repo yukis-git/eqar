@@ -1,0 +1,12 @@
+[package]
+name = "eqar-testkit"
+description = "Deterministic synthetic equirectangular images and fixture helpers for eqar tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+eqar = { path = "../eqar" }

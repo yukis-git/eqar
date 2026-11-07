@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5 # the Python extension crate is linted too (PyO3 build script)
+        with:
+          python-version: "3.12"
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Parity tests pick their tolerance by cfg: strict on aarch64 + NEON (macos-14), the
+      # looser x86_64 / scalar gate elsewhere. The gates are not changed to make CI pass.
+      - name: test
+        run: cargo test --release
+      - name: test, scalar paths on aarch64
+        if: matrix.os == 'macos-14'
+        run: cargo test --release -p eqar --features no-neon
+      - name: doc
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: Rust 1.80 builds the library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.80.1 --profile minimal
+      - run: cargo +1.80.1 check -p eqar -p eqar-testkit --all-targets --locked
+
+  python:
+    name: Python ${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.9" }
+          - { os: macos-14, python: "3.13" }
+          - { os: windows-latest, python: "3.12" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build and install the extension (maturin through pip)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pytest .
+      - name: pytest
+        run: python -m pytest tests/py -q

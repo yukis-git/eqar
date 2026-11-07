@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/eqar", "crates/eqar-testkit", "crates/eqar-py"]
+# `cargo build/test` at the root covers the pure-Rust crates only; the Python extension is
+# built by maturin (or with `--workspace`).
+default-members = ["crates/eqar", "crates/eqar-testkit"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yukis-git/eqar"
+
+[profile.release]
+opt-level = 3
+debug = false

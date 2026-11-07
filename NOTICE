@@ -1,0 +1,12 @@
+eqar
+Copyright (c) 2026 Yuki Sakata
+
+This product includes data derived from OpenCV (https://opencv.org), licensed under the
+Apache License, Version 2.0 (see LICENSE-APACHE):
+
+  The predefined ArUco marker dictionaries (DICT_4X4_50 ... DICT_7X7_1000) in
+  crates/eqar/src/dict_tables.rs are generated from the dictionary tables of OpenCV 5.0.0
+  (modules/objdetect, aruco). Copyright the OpenCV contributors.
+
+The Python extension additionally links PyO3, rust-numpy and ndarray, each available under
+MIT OR Apache-2.0.

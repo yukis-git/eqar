@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "eqar: ArUco marker detection in equirectangular images"
+type: software
+version: 0.1.0
+authors:
+  - family-names: Sakata
+    given-names: Yuki
+license:
+  - MIT
+  - Apache-2.0
+repository-code: "https://github.com/yukis-git/eqar"
+keywords:
+  - ArUco
+  - fiducial markers
+  - equirectangular
+  - 360 degree camera

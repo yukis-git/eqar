@@ -1,0 +1,26 @@
+[package]
+name = "eqar-py"
+description = "Python bindings for the eqar equirectangular ArUco detector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "_eqar"
+crate-type = ["cdylib"]
+# The extension module only links inside a Python process; its behaviour is tested
+# from Python (tests/py).
+test = false
+doctest = false
+
+[features]
+# Enabled by maturin (see pyproject.toml); off for `cargo clippy` / `cargo doc`.
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+eqar = { path = "../eqar" }
+numpy = "0.25"
+pyo3 = { version = "0.25", features = ["abi3-py39"] }

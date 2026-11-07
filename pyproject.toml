@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "eqar"
+version = "0.1.0"
+description = "Equirectangular (360 degree) ArUco marker detector"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Yuki Sakata" }]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.21"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/yukis-git/eqar"
+
+[project.optional-dependencies]
+test = ["pytest"]
+bench = ["opencv-python-headless"]
+
+[tool.maturin]
+manifest-path = "crates/eqar-py/Cargo.toml"
+python-source = "crates/eqar-py/python"
+module-name = "eqar._eqar"
+features = ["extension-module"]
+include = [
+    { path = "LICENSE-MIT", format = "sdist" },
+    { path = "LICENSE-APACHE", format = "sdist" },
+    { path = "NOTICE", format = "sdist" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/py"]

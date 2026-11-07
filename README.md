@@ -198,8 +198,9 @@ thread CPU time, earlier measurements with a throw-away harness that is not incl
   `corner_valid` and `corner_sigma_scale`.
 - **No x86 SIMD.** NEON kernels are used on aarch64; on x86_64 the scalar code runs (slower than
   the numbers above, which are from an Apple M4). The cross-check against the C++ implementation
-  was run on aarch64; on x86_64 the test suite selects a looser corner tolerance (0.02 px instead
-  of 0.002 px) and has not been run on x86_64 hardware by the author.
+  was run on aarch64 (macOS). CI also runs the test suite on x86_64 Linux and Windows, where it
+  selects a looser corner tolerance (0.02 px instead of 0.002 px) because the build has no fused
+  multiply-add and a different libm. Speed on x86_64 has not been measured.
 - **The relaxed selection path is not exercised by the test scenes** (`prov == PROV_RELAXED`,
   a known-id re-fit of a contour the strict selection rejects); it ports the C++ logic but was
   never observed to run.

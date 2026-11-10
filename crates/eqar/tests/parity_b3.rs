@@ -17,6 +17,14 @@
 //! pixel, and (rarely) flip a borderline accept/reject. There only the stage-level
 //! structure is compared with documented tolerances, and `ok` must match on every run
 //! except a small allowance.
+//!
+//! Known deviations (v0.1.1). On `WINDING_FIX_SCENES` the reference is wrong and the
+//! expectations are replaced by ground truth: there a marker on a darker background has a
+//! white quiet zone whose outline is the INNER border of the background region, and the
+//! reference, deciding holes by containment parity, takes that outline for the marker (or
+//! rejects the candidate). The bridge now decides holes by winding
+//! (`PatchContours::hole`), so on these scenes its quads are checked against the exact tag
+//! corners instead, and it must accept every run the reference accepted.
 
 use eqar::bridge::*;
 use eqar::geometry::Vec3;
@@ -24,7 +32,7 @@ use eqar::image::{Fmt, View};
 use eqar_testkit::json::Value;
 use eqar_testkit::load_fixture;
 use eqar_testkit::sha256::sha256_hex;
-use eqar_testkit::synth::{test_marker_center_ray, SynthCase};
+use eqar_testkit::synth::{test_marker_center_ray, test_marker_corner_rays, SynthCase};
 
 const STRICT: bool = cfg!(all(target_arch = "aarch64", not(feature = "no-neon")));
 
@@ -34,6 +42,59 @@ const RAY_TOL: f64 = if STRICT { 1e-10 } else { 3e-4 };
 const QUAD_TOL: f64 = if STRICT { 1e-8 } else { 0.5 };
 /// Runs whose `ok` may differ from the reference on the loose gate.
 const LOOSE_OK_MISMATCHES: usize = 4;
+/// Scenes where the reference selects the quiet zone's outline; see the module note.
+const WINDING_FIX_SCENES: [&str; 4] = [
+    "id3_-100_-8_roll13",
+    "noisy_marker_amp6",
+    "noisy_marker_amp10_roll",
+    "plain_half40",
+];
+/// Ground-truth gates on those scenes, set to the worst error the reference-matching path
+/// itself shows on the other single-marker scenes of this fixture: bridge quads 1.41 px_eq
+/// = 2.0 % of the side (track plan, lat80_roll45), raw contour quads 2.14 patch px
+/// (id0_30_-12). A bridge quad passes within max(GT_TOL_PX, GT_TOL_SIDE * side).
+const GT_TOL_PX: f64 = 1.5;
+const GT_TOL_SIDE: f64 = 0.02;
+const GT_TOL_PATCH_PX: f64 = 2.2;
+
+/// Exact tag-corner rays of the (single) marker of a fixture scene.
+fn truth_rays(case: &Value) -> Vec<Vec3> {
+    let m = &case.get("markers").arr()[0];
+    let r = test_marker_corner_rays(
+        m.get("lon").f64(),
+        m.get("lat").f64(),
+        m.get("half").f64(),
+        m.get("roll").f64(),
+    );
+    r.to_vec()
+}
+
+/// Mean tag side of `r` in px_eq of width `w`.
+fn side_px(r: &[Vec3], w: i32) -> f64 {
+    let px = 2.0 * std::f64::consts::PI / w as f64;
+    (0..4)
+        .map(|i| {
+            let (p, q) = (r[i], r[(i + 1) % 4]);
+            (p.x * q.x + p.y * q.y + p.z * q.z).clamp(-1.0, 1.0).acos() / px
+        })
+        .sum::<f64>()
+        / 4.0
+}
+
+/// Largest angle between matching rays over the best cyclic start, in px_eq of width `w`.
+fn cyclic_err_px(a: &[Vec3], b: &[Vec3], w: i32) -> f64 {
+    let px = 2.0 * std::f64::consts::PI / w as f64;
+    (0..4)
+        .map(|k| {
+            (0..4)
+                .map(|i| {
+                    let (p, q) = (a[i], b[(i + k) % 4]);
+                    (p.x * q.x + p.y * q.y + p.z * q.z).clamp(-1.0, 1.0).acos() / px
+                })
+                .fold(0.0, f64::max)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
 
 struct Lcg(u32);
 impl Lcg {
@@ -168,6 +229,23 @@ fn bridge_runs_match_the_cpp_reference() {
             .unwrap();
             n_runs += 1;
             let want_ok = run.get("ok").i64() != 0;
+            if WINDING_FIX_SCENES.contains(&name) {
+                assert!(
+                    ok || !want_ok,
+                    "{at}: rejected a run the reference accepted"
+                );
+                if ok {
+                    let t = truth_rays(case);
+                    let e = cyclic_err_px(&out, &t, w);
+                    let tol = GT_TOL_PX.max(GT_TOL_SIDE * side_px(&t, w));
+                    assert!(
+                        e <= tol,
+                        "{at}: {e} px_eq from the true tag corners (tol {tol})"
+                    );
+                    n_ok += 1;
+                }
+                continue;
+            }
             if ok != want_ok {
                 mismatches += 1;
                 if STRICT {
@@ -320,6 +398,20 @@ fn patch_stages_match_the_cpp_reference() {
             let nc = trace_contours(&bw, s, &mut c, min_len, &mut sc);
             let odd = c.depth.iter().filter(|d| **d % 2 != 0).count() as i64;
             let idx = select_marker_contour(&c, s, 0.80, &mut sc);
+            if WINDING_FIX_SCENES.contains(&scene_name) && idx as i64 != m.get("idx").i64() {
+                assert!(idx >= 0 && !c.hole[idx as usize], "{at}: selected a hole");
+                let mut q = [[0.0; 2]; 4];
+                assert!(quad_from_contour(&c, idx, &mut q, &mut sc), "{at}: no quad");
+                let qr: Vec<Vec3> = q.iter().map(|pt| patch_to_ray(&p, pt[0], pt[1])).collect();
+                // the raw (unpolished) contour quad: within one patch pixel at the centre
+                let patch_px = 2.0 * p.tan_t / s as f64 / (2.0 * std::f64::consts::PI / w as f64);
+                let e = cyclic_err_px(&qr, &truth_rays(case), w) / patch_px;
+                assert!(
+                    e <= GT_TOL_PATCH_PX,
+                    "{at}: selected contour is {e} patch px off the tag"
+                );
+                continue;
+            }
             if STRICT {
                 assert_eq!(nc as i64, m.get("n_contours").i64(), "{at}: contours");
                 assert_eq!(odd, m.get("n_odd").i64(), "{at}: holes");

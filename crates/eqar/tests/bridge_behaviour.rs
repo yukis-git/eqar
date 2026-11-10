@@ -787,6 +787,52 @@ fn contours_resolve_four_levels_of_nesting() {
     assert!(near(cx2, 119.5, 2.0) && near(cy2, 119.5, 2.0));
 }
 
+// ---- regression: a dark region touching the patch border must not flip hole parity ------
+
+#[test]
+fn dark_frame_at_patch_border_keeps_marker_selectable() {
+    // A large near marker on a white board in front of a darker background: the bridge's
+    // pass-2 patch sees the background as a dark frame along the patch border (thick at the
+    // top, 2 px elsewhere) around the white board, with the marker in the middle. The frame's
+    // own outer border lies on the patch edge and is never traced, only its inner border (the
+    // board outline). Containment parity then makes that board outline a depth-0 "dark
+    // region" and the marker a depth-1 "hole", and the selection used to return the board
+    // (or the marker's white interior) instead of the marker.
+    let s = 240usize;
+    let mut bw = vec![0u8; s * s];
+    for y in 0..s {
+        for x in 0..s {
+            let frame = y < 25 || x < 2 || x >= s - 2 || y >= s - 2;
+            let marker = (70..170).contains(&x) && (70..170).contains(&y);
+            if frame || marker {
+                bw[y * s + x] = 255;
+            }
+        }
+    }
+    for y in 95..145 {
+        for x in 95..145 {
+            bw[y * s + x] = 0; // the marker's white data modules
+        }
+    }
+    let (c, _, mut sc) = trace(&bw, s as i32, 12);
+    let idx = select_marker_contour(&c, s as i32, 0.80, &mut sc);
+    assert!(idx >= 0);
+    let mut q = [[0.0; 2]; 4];
+    assert!(quad_from_contour(&c, idx, &mut q, &mut sc));
+    order_quad(&mut q);
+    let (cx, cy) = quad_centre(&q);
+    assert!(near(cx, 119.5, 2.0) && near(cy, 119.5, 2.0));
+    for i in 0..4 {
+        let dx = q[(i + 1) % 4][0] - q[i][0];
+        let dy = q[(i + 1) % 4][1] - q[i][1];
+        assert!(near((dx * dx + dy * dy).sqrt(), 100.0, 4.0)); // the marker, not board / modules
+    }
+    let mut out = [0i32; 3];
+    let n = select_marker_contours_relaxed(&c, s as i32, &mut out, 3);
+    assert!(n >= 1);
+    assert_eq!(out[0], idx);
+}
+
 // ---- regression: the DP split point must not become a quad vertex --------------------
 //
 // Reproduces a real-clip frame's failure exactly. The traced contour of a marker whose top

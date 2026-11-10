@@ -689,8 +689,15 @@ pub struct PatchContours {
     pub start: Vec<u32>,
     /// -1 for a top-level contour.
     pub parent: Vec<i32>,
-    /// Nesting depth; ODD = a hole.
+    /// Nesting depth by geometric containment. Odd is USUALLY a hole, but not always: a
+    /// dark region touching the patch edge has no traced outer border, so everything it
+    /// encloses sits one level shallower than it really is. Use `hole` to tell holes from
+    /// dark regions.
     pub depth: Vec<i32>,
+    /// True for a hole border (background inside), from the traced winding: the border
+    /// follower keeps the foreground on a fixed side, so an outer border has a positive
+    /// shoelace area and a hole border a negative one, whatever else was traced.
+    pub hole: Vec<bool>,
 }
 
 /// Even-odd crossing-number test over a contour's own traced points taken as a closed
@@ -715,6 +722,12 @@ fn point_in_polygon(px: f64, py: f64, pts: &[i32], begin: u32, end: u32) -> bool
 
 /// Shoelace area of a contour's traced points (cv2.contourArea).
 fn polygon_area(pts: &[i32], begin: u32, end: u32) -> f64 {
+    polygon_signed_area(pts, begin, end).abs()
+}
+
+/// Signed shoelace area (x right, y down): positive for an outer border as
+/// `trace_contours` walks it, negative for a hole border.
+fn polygon_signed_area(pts: &[i32], begin: u32, end: u32) -> f64 {
     let n = (end - begin) as usize;
     let b = begin as usize;
     let mut s = 0.0f64;
@@ -726,7 +739,7 @@ fn polygon_area(pts: &[i32], begin: u32, end: u32) -> f64 {
         let yj = pts[2 * (b + j) + 1] as f64;
         s += xi * yj - xj * yi;
     }
-    s.abs() * 0.5
+    s * 0.5
 }
 
 /// Area-weighted centroid via Green's theorem (cv2.moments), NOT the mean of the boundary
@@ -874,7 +887,8 @@ fn trace_one(
 /// back-up) extended for INNER borders: a foreground pixel with background to its right
 /// (not yet visited) starts a hole contour, exactly as one with background to its left
 /// starts an outer one. parent/depth are then resolved geometrically (point-in-polygon of
-/// each contour's first point against every other, picking the smallest-area container).
+/// each contour's first point against every other, picking the smallest-area container);
+/// `hole` comes from each contour's own winding, not from the depth parity.
 /// `bw` is `s * s` bytes; contours shorter than `minlen` points are dropped. Returns the
 /// number of contours kept.
 pub fn trace_contours(
@@ -888,6 +902,7 @@ pub fn trace_contours(
     c.start.clear();
     c.parent.clear();
     c.depth.clear();
+    c.hole.clear();
     let su = s as usize;
     sc.visited.clear();
     sc.visited.resize(su * su, 0);
@@ -931,6 +946,7 @@ pub fn trace_contours(
     // contour that contains its first traced point; depth counts ancestors (odd = a hole).
     c.parent.resize(n, -1);
     c.depth.resize(n, 0);
+    c.hole.resize(n, false);
     sc.area.clear();
     sc.area.resize(n, 0.0);
     sc.bbox.clear();
@@ -938,7 +954,9 @@ pub fn trace_contours(
     for i in 0..n {
         let b0 = c.start[i];
         let e0 = c.start[i + 1];
-        sc.area[i] = polygon_area(&c.pts, b0, e0);
+        let sa = polygon_signed_area(&c.pts, b0, e0);
+        sc.area[i] = sa.abs();
+        c.hole[i] = sa < 0.0;
         let mut x0 = c.pts[2 * b0 as usize];
         let mut x1 = x0;
         let mut y0 = c.pts[2 * b0 as usize + 1];
@@ -1007,7 +1025,7 @@ pub fn trace_contours(
     n as i32
 }
 
-/// Selection thresholds: depth % 2 skips holes, area in [2 %, 92 %] of S^2 rejects, fewer
+/// Selection thresholds: hole borders (by winding, see `PatchContours::hole`) are skipped, area in [2 %, 92 %] of S^2 rejects, fewer
 /// than 12 points rejects, solidity (area / convex-hull area, both by the shoelace
 /// formula) below `solidity_min` rejects, not containing the patch centre (S-1)/2
 /// rejects; the surviving contour whose AREA-WEIGHTED centroid is nearest the patch
@@ -1026,7 +1044,7 @@ pub fn select_marker_contour(
     let mut best_d2 = 1e300f64;
     for i in 0..n {
         let iu = i as usize;
-        if c.depth[iu] % 2 != 0 {
+        if c.hole[iu] {
             continue; // a hole, not a dark region
         }
         let begin = c.start[iu];
@@ -1955,7 +1973,7 @@ pub fn contour_misfit(c: &PatchContours, idx: i32, q: &[[f64; 2]; 4]) -> f64 {
 }
 
 /// Contours `select_marker_contour` rejects ONLY for solidity or for not containing the
-/// patch centre (even depth, >= 12 points, area in [2 %, 92 %], filling >= 25 % of their
+/// patch centre (not a hole border, >= 12 points, area in [2 %, 92 %], filling >= 25 % of their
 /// bounding box), nearest-centroid first, at most `cap` indices written to `out`. Returns
 /// how many. The caller must demand a 4-line fit before it believes one.
 pub fn select_marker_contours_relaxed(c: &PatchContours, s: i32, out: &mut [i32], cap: i32) -> i32 {
@@ -1967,7 +1985,7 @@ pub fn select_marker_contours_relaxed(c: &PatchContours, s: i32, out: &mut [i32]
     let mut nb = 0usize;
     for i in 0..n {
         let iu = i as usize;
-        if c.depth[iu] % 2 != 0 {
+        if c.hole[iu] {
             continue;
         }
         let begin = c.start[iu];

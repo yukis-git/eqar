@@ -115,12 +115,86 @@ def paste_marker(img, marker_id, lon_deg, lat_deg, half_deg, roll_deg=0.0,
     return img
 
 
-def make_frame(w, markers, bg=205, noise=0.0, seed=0, blur=0.0):
+def board_frame(lon_deg, lat_deg, tilt_deg=0.0, yaw_deg=0.0):
+    """(c, ex, ey, n) of a physical board centred on ray (lon, lat): standing upright and
+    facing the camera, yawed by `yaw_deg` about the vertical, then tilted back by `tilt_deg`
+    (top edge away from the camera). ex points right in the frame, ey up the board."""
+    c = ray(np.radians(lon_deg), np.radians(lat_deg))
+    up = np.array([0.0, 1.0, 0.0])
+    hz = c - c[1] * up
+    hz /= np.linalg.norm(hz)  # horizontal, away from the camera
+    ex = np.cross(hz, up)
+    ex /= np.linalg.norm(ex)
+    yw = np.radians(yaw_deg)
+    ex, hz = ex * np.cos(yw) + hz * np.sin(yw), -ex * np.sin(yw) + hz * np.cos(yw)
+    t = np.radians(tilt_deg)
+    ey = np.cos(t) * up + np.sin(t) * hz
+    return c, ex, ey, np.cross(ex, ey)
+
+
+def board_corner_rays(lon_deg, lat_deg, dist, side=0.42, tilt_deg=0.0, yaw_deg=0.0):
+    """Exact TL, TR, BR, BL tag-corner rays (4, 3) of a marker made by `paste_board`."""
+    c, ex, ey, _ = board_frame(lon_deg, lat_deg, tilt_deg, yaw_deg)
+    h = side / 2
+    p = dist * c + np.array([[-h, h], [h, h], [h, -h], [-h, -h]]) @ np.stack([ex, ey])
+    return p / np.linalg.norm(p, axis=1, keepdims=True)
+
+
+def paste_board(img, marker_id, lon_deg, lat_deg, dist, side=0.42, board=None, tilt_deg=0.0,
+                yaw_deg=0.0, dictionary="4x4_50", dark=40.0, bright=220.0, ss=3):
+    """Paints a physical planar board at `dist` m along ray (lon, lat), oriented as in
+    `board_frame`: a `board` m wide `bright` square (default: the 1.5-cell quiet zone only)
+    carrying marker `marker_id` whose black square is `side` m. Perspective-exact (unlike
+    `paste_marker`, which paints on the tangent plane of the unit sphere), anti-aliased with
+    an `ss` x `ss` supersample, in place."""
+    hgt, wid = img.shape
+    ncell = int(dictionary[0]) + 2
+    grid = eqar.generate_marker(marker_id, dictionary, size=ncell) > 0
+    cell = side / ncell
+    hb = side / 2 + 1.5 * cell if board is None else board / 2
+    c, ex, ey, n = board_frame(lon_deg, lat_deg, tilt_deg, yaw_deg)
+    p0 = dist * c
+    crn = np.array([p0 + a * hb * ex + b * hb * ey for a in (-1, 1) for b in (-1, 1)])
+    px = ray_to_pixel(crn, wid, hgt)
+    if px[:, 0].max() - px[:, 0].min() > wid / 2:
+        raise ValueError("paste_board: boards across the +-180 seam are not supported")
+    x0, x1 = int(px[:, 0].min()) - 3, int(px[:, 0].max()) + 4
+    y0, y1 = max(0, int(px[:, 1].min()) - 3), min(hgt - 1, int(px[:, 1].max()) + 4)
+    X, Y = np.meshgrid(np.arange(x0, x1 + 1), np.arange(y0, y1 + 1))
+    acc = np.zeros(X.shape)
+    hits = np.zeros(X.shape)
+    pn = p0 @ n
+    for sy in range(ss):
+        for sx in range(ss):
+            d = pixel_rays(X + ((sx + 0.5) / ss - 0.5), Y + ((sy + 0.5) / ss - 0.5), wid, hgt)
+            den = d @ n
+            ok = np.abs(den) > 1e-12
+            t = np.where(ok, pn / np.where(ok, den, 1.0), -1.0)
+            q = d * t[..., None] - p0
+            u, v = q @ ex, q @ ey
+            inside = ok & (t > 0) & (np.abs(u) <= hb) & (np.abs(v) <= hb)
+            col = np.clip(np.floor((u + side / 2) / cell).astype(int), 0, ncell - 1)
+            row = np.clip(np.floor((side / 2 - v) / cell).astype(int), 0, ncell - 1)
+            val = np.where(grid[row, col], bright, dark)
+            val = np.where((np.abs(u) > side / 2) | (np.abs(v) > side / 2), bright, val)
+            acc += np.where(inside, val, 0.0)
+            hits += inside
+    xi = X % wid
+    old = img[Y, xi].astype(float)
+    new = (acc + (ss * ss - hits) * old) / (ss * ss)
+    img[Y, xi] = np.where(hits > 0, np.floor(new + 0.5), old).astype(img.dtype)
+    return img
+
+
+def make_frame(w, markers, bg=205, noise=0.0, seed=0, blur=0.0, boards=()):
     """uint8 (w/2, w) gray frame. `markers` = iterable of dicts for `paste_marker`
-    (keys id, lon, lat, half, roll)."""
+    (keys id, lon, lat, half, roll); `boards` = iterable of keyword dicts for `paste_board`
+    (painted after the markers)."""
     img = np.full((w // 2, w), float(bg))
     for m in markers:
         paste_marker(img, m["id"], m["lon"], m["lat"], m["half"], m.get("roll", 0.0))
+    for b in boards:
+        paste_board(img, **b)
     if blur > 0:
         r = int(np.ceil(3 * blur))
         kx = np.exp(-0.5 * (np.arange(-r, r + 1) / blur) ** 2)

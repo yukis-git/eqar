@@ -533,3 +533,26 @@ def test_independent_detectors_run_concurrently(frame):
     for t in ts:
         t.join(timeout=60)
     assert res == [[7, 7]] * 3
+
+
+# ---------------------------------------------------------------- near board, full resolution
+
+NEAR_W = 6528  # Insta360 ONE RS 1-inch 360 still width
+
+
+def near_board_frame(dist, board=0.76, bg=90):
+    """A 0.42 m DICT_4X4_50 id 3 on a white board tilted back 12 deg, `dist` m from the
+    camera, in front of a darker background; the black square is ~300-480 px on a side."""
+    b = dict(marker_id=3, lon_deg=30.0, lat_deg=-15.0, dist=dist, board=board, tilt_deg=12.0,
+             dark=50.0, bright=190.0)
+    img = S.make_frame(NEAR_W, [], bg=bg, noise=4.0, blur=1.5, seed=3, boards=[b])
+    return img, S.board_corner_rays(30.0, -15.0, dist, tilt_deg=12.0)
+
+
+@pytest.mark.parametrize("dist", [1.0, 1.25, 1.5])
+def test_near_large_marker_on_board_full_resolution(dist):
+    img, truth = near_board_frame(dist)
+    ms = eqar.detect(img, format="gray")
+    assert [m.id for m in ms] == [3]
+    assert ms[0].side_px > 250
+    assert S.angular_error_px(ms[0].rays, truth, NEAR_W).max() < 1.0

@@ -185,7 +185,7 @@ fn tags_a_small_marker_with_second_scale() {
 }
 
 #[test]
-fn small_pass_runs_only_without_tier1_and_with_budget_left() {
+fn small_pass_runs_whenever_budget_is_left() {
     let blank = canvas();
     let mut marker = canvas();
     // A comfortably large marker: the f=4 pass resolves it at reference-grade shape.
@@ -207,13 +207,18 @@ fn small_pass_runs_only_without_tier1_and_with_budget_left() {
     assert_eq!(d.stats().n_tier1, 0);
     assert_eq!(d.stats().ran_small, 0);
 
-    // 3. A marker the f=4 pass sees at reference-grade shape, with ample budget.
+    // 3. A marker the f=4 pass sees at reference-grade shape, with ample budget: the pass
+    // still runs (a larger marker must not hide smaller ones), but never replaces or
+    // duplicates what f=4 accepted.
     let mut p = defp();
     p.time_budget_ms = 50.0;
     let mut d = Detector::new(W, H, &p).unwrap();
-    d.scan(&view(&marker), 8).unwrap();
+    let got = d.scan(&view(&marker), 8).unwrap();
     assert!(d.stats().n_tier1 >= 1);
-    assert_eq!(d.stats().ran_small, 0);
+    assert_eq!(d.stats().ran_small, 1);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].id, 0);
+    assert_eq!(got[0].flags & eqar::codes::FLAG_SECOND_SCALE, 0);
 }
 
 // ---- per-corner validity through the whole detector ----

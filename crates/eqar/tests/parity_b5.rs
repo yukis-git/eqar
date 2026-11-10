@@ -12,6 +12,18 @@
 //! reference. Elsewhere (x86_64, or `no-neon`): same count and ids, corners within 0.02 px
 //! (measured as the chord between the unit rays in px_eq, which equals the pixel distance
 //! except in the polar singularity, where the longitude of a point is ill-conditioned).
+//!
+//! Known deviations (v0.1.1). On `WINDING_FIX_SCENES` (a marker on a mid-gray background)
+//! the reference's bridge takes the white quiet zone's outline for the marker and the
+//! detection is lost; the bridge now decides holes by winding, so where the reference
+//! returned nothing for these scenes the step must return exactly the scene's marker, with
+//! every corner within `GT_TOL_PX` of the exact tag corners.
+//!
+//! The f=2 small-marker pass now runs whenever budget is left (the reference ran it only
+//! when f=4 found nothing). It skips candidates inside accepted markers, so outputs are
+//! unchanged; on `SMALL_PASS_COUNTER_STEPS` (a marker decoded but then dropped by
+//! `expect_id` / `in_use_ids`, so its modules reach the pass) only `n_candidates` may
+//! exceed the reference's, and every other counter must still match.
 
 #![allow(clippy::field_reassign_with_default)]
 
@@ -20,7 +32,7 @@ use eqar::{Detector, EqarError, ImageView, Marker, Params, PixelFormat, Prior, Q
 use eqar_testkit::json::Value;
 use eqar_testkit::load_fixture;
 use eqar_testkit::sha256::sha256_hex;
-use eqar_testkit::synth::SynthCase;
+use eqar_testkit::synth::{test_marker_corner_rays, SynthCase};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -28,6 +40,12 @@ use std::sync::Mutex;
 const STRICT: bool = cfg!(all(target_arch = "aarch64", not(feature = "no-neon")));
 /// Corner position gate, px.
 const CORNER_TOL: f64 = if STRICT { 0.002 } else { 0.02 };
+/// Scenes the reference misses; see the module note.
+const WINDING_FIX_SCENES: [usize; 3] = [2, 28, 29];
+/// Corner gate against ground truth on those scenes, px_eq.
+const GT_TOL_PX: f64 = 0.3;
+/// Steps where only `n_candidates` grows; see the module note.
+const SMALL_PASS_COUNTER_STEPS: [&str; 2] = ["detect_expect5 step 0", "detect_in_use_none step 0"];
 
 struct Lcg(u32);
 impl Lcg {
@@ -302,6 +320,37 @@ fn run_case(case: &Value, scenes: &[Value], worst: &mut Worst) -> usize {
         }
         let got = res.unwrap_or_else(|e| panic!("{tag}: {e}"));
         let want: Vec<Marker> = st.get("markers").arr().iter().map(parse_marker).collect();
+        if WINDING_FIX_SCENES.contains(&sidx) && ret == 0 && op == "detect" {
+            let m = &scenes[sidx].get("markers").arr()[0];
+            assert_eq!(
+                got.iter().map(|g| g.id).collect::<Vec<_>>(),
+                vec![m.get("id").i64() as i32],
+                "{tag}: the scene's marker"
+            );
+            let t = test_marker_corner_rays(
+                m.get("lon").f64(),
+                m.get("lat").f64(),
+                m.get("half").f64(),
+                m.get("roll").f64(),
+            );
+            let px = 2.0 * std::f64::consts::PI / w as f64;
+            let e = (0..4)
+                .map(|k| {
+                    (0..4)
+                        .map(|i| {
+                            let g = got[0].ray[i];
+                            let q = t[(i + k) % 4];
+                            let d = g[0] as f64 * q.x + g[1] as f64 * q.y + g[2] as f64 * q.z;
+                            d.clamp(-1.0, 1.0).acos() / px
+                        })
+                        .fold(0.0, f64::max)
+                })
+                .fold(f64::INFINITY, f64::min);
+            eprintln!("{tag}: winding-fix scene {sidx}, max corner error {e:.3} px_eq");
+            assert!(e <= GT_TOL_PX, "{tag}: {e} px_eq from the true tag corners");
+            n_markers += got.len();
+            continue;
+        }
         assert_eq!(
             got.len(),
             ret as usize,
@@ -333,6 +382,10 @@ fn run_case(case: &Value, scenes: &[Value], worst: &mut Worst) -> usize {
                 s.best_reject_code,
             ];
             for (i, (a, b)) in have.iter().zip(&v).enumerate() {
+                if i == 0 && SMALL_PASS_COUNTER_STEPS.contains(&tag.as_str()) {
+                    assert!(*a as f64 >= *b, "{tag}: stats[0]");
+                    continue;
+                }
                 assert_eq!(*a as f64, *b, "{tag}: stats[{i}]");
             }
         }

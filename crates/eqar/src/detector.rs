@@ -130,12 +130,16 @@ pub struct Stats {
 pub const K_PRE_BRIDGE_SUB: i32 = 2;
 pub const K_PRE_BRIDGE_BORDER_FRAC: f32 = 0.75;
 
-/// The f=2 small-marker pass costs ~4x the f=4 band. It fires only when ALL of: nothing
-/// decoded at f=4; the f=4 pass produced ZERO tier-1 candidates (a tier-1 candidate is the
-/// strict, reference-grade shape a real marker of >= 24 px_eq produces, so its presence
-/// means f=4 DID see marker-like structure and the failure is downstream, not a resolution
-/// problem); and at least this many ms of the Stage 2-5 budget are left, so the pass is
-/// never started only to be abandoned mid-way.
+/// The f=2 small-marker pass costs ~4x the f=4 band. It fires whenever `use_second_scale` is
+/// set and at least this many ms of the Stage 2-5 budget are left after the f=4 candidates,
+/// so the pass is never started only to be abandoned mid-way.
+///
+/// It used to fire only when nothing decoded at f=4 AND f=4 produced no tier-1 candidate.
+/// In a scene with several markers one larger marker satisfies neither, and every marker
+/// below the f=4 floor (~24 px_eq) was then lost: on synthetic 6528 px frames with 8 markers
+/// of 20-40 px that gate cost 66.9 % -> 90.1 % detection (no false positives either way).
+/// Under the 2 ms video budget the f=4 candidates usually leave less than this, so video
+/// timing is unchanged; a one-shot detect pays ~3-4 ms.
 pub const K_SMALL_PASS_MIN_BUDGET_MS: f64 = 1.0;
 
 /// How far a candidate got before failing, most advanced (most informative) first.
@@ -173,6 +177,20 @@ fn candidate_flags(c: &Candidate) -> u32 {
 }
 
 #[inline]
+/// Whether ray `v` lies inside an accepted detection of `raw`: within the largest
+/// centre-to-corner angle of that detection's quad.
+fn inside_accepted(raw: &[Detection], v: &Vec3) -> bool {
+    raw.iter().any(|d| {
+        let ang = |a: &Vec3, b: &Vec3| dot(a, b).clamp(-1.0, 1.0).acos();
+        let r = d
+            .ray
+            .iter()
+            .map(|c| ang(c, &d.center_ray))
+            .fold(0.0, f64::max);
+        ang(v, &d.center_ray) <= r
+    })
+}
+
 fn ms_since(t0: Instant) -> f64 {
     t0.elapsed().as_secs_f64() * 1e3
 }
@@ -874,11 +892,8 @@ impl Detector {
             self.stats.n_budget_dropped += (candidates.len() - idx) as i32;
         }
 
-        // The f=2 small-marker pass: see K_SMALL_PASS_MIN_BUDGET_MS for the full rule and
-        // why it is not simply "nothing was accepted".
-        if self.stats.n_decode_ok == 0
-            && self.stats.n_tier1 == 0
-            && self.params.use_second_scale
+        // The f=2 small-marker pass: see K_SMALL_PASS_MIN_BUDGET_MS for the rule.
+        if self.params.use_second_scale
             && budget - ms_since(t_budget0) >= K_SMALL_PASS_MIN_BUDGET_MS
         {
             self.stats.ran_small = 1;
@@ -925,6 +940,10 @@ impl Detector {
         self.proposal.run_small(v, small)?;
         self.timings[0] += ms_since(ts0);
         dedupe_candidates(small);
+        // The pass only exists for what f=4 could not see: a candidate whose centre lies
+        // inside a marker already accepted (its own duplicate, or one of its modules) is
+        // dropped before it is counted or bridged, so the f=4 results are never replaced.
+        small.retain(|c| !inside_accepted(raw, &c.v));
         order_for_budget(small);
         cap_candidates(small, K_MAX_CANDIDATES_PER_FRAME);
         self.stats.n_candidates += small.len() as i32;

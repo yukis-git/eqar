@@ -108,7 +108,8 @@ pub struct Params {
     /// Candidates not reached within it are dropped (counted in `Stats`). Default 2.0;
     /// `f32::INFINITY` removes the limit.
     pub time_budget_ms: f32,
-    /// Run the f=2 small-marker pass when nothing larger decoded. Default true.
+    /// Run the f=2 small-marker pass (markers below ~24 px_eq) when at least 1 ms of the
+    /// time budget is left after the f=4 candidates. Default true.
     pub use_second_scale: bool,
     /// Reject (instead of only flag) markers whose edge residual is high. Default false.
     pub reject_high_resid: bool,
